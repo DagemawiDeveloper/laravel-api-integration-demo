@@ -2,7 +2,7 @@
 
 [![RelayHub quality](https://github.com/DagemawiDeveloper/laravel-api-integration-demo/actions/workflows/tests.yml/badge.svg)](https://github.com/DagemawiDeveloper/laravel-api-integration-demo/actions/workflows/tests.yml)
 
-**A Laravel reference package for reliable third-party integrations: signed webhooks, deterministic idempotency, queues, retries, dead-letter state, bounded observability, and executable tests.**
+**A Laravel 12 reference package for reliable third-party integrations: signed webhooks, deterministic idempotency, queues, retries, dead-letter state, bounded observability, and executable tests.**
 
 RelayHub focuses on what happens after the happy-path API demo: a caller repeats the same request, a key is accidentally reused for different content, a partner responds with `503`, a queue exhausts its attempts, or a callback arrives more than once.
 
@@ -21,7 +21,7 @@ RelayHub focuses on what happens after the happy-path API demo: a caller repeats
 - HTTPS-only outbound integration boundary
 - Response metadata persistence without storing arbitrary partner content
 - PHPUnit feature/unit coverage with Orchestra Testbench
-- GitHub Actions across PHP 8.1, 8.2, and 8.3
+- GitHub Actions across PHP 8.2, 8.3, and 8.4
 
 ## Architecture
 
@@ -157,6 +157,13 @@ RELAYHUB_QUEUE=integrations
 
 See [`.env.example`](.env.example).
 
+## Requirements
+
+- PHP 8.2+
+- Laravel 12
+- A configured queue worker for outbound delivery
+- SQLite, MySQL, MariaDB, or PostgreSQL through Laravel's database layer
+
 ## Tests
 
 ```bash
@@ -181,7 +188,7 @@ The suite covers:
 - dead-letter transition;
 - HTTPS enforcement and retry policy.
 
-CI validates Composer metadata, lints PHP, and runs PHPUnit on PHP 8.1, 8.2, and 8.3.
+CI validates Composer metadata, resolves supported Laravel 12 dependencies, lints PHP, and runs PHPUnit on PHP 8.2, 8.3, and 8.4.
 
 ## Scope
 
