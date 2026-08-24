@@ -21,9 +21,11 @@ jobs:
           coverage: none
           tools: composer:v2
       - name: Validate Composer metadata
-        run: composer validate --strict --no-check-publish
-      - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        run: composer validate --strict --no-check-publish --no-check-lock
+      - name: Resolve library dependencies
+        run: |
+          rm -f composer.lock
+          composer update --no-interaction --prefer-dist --no-progress
       - name: Lint PHP files
         run: composer lint
       - name: Run PHPUnit
