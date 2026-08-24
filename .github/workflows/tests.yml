@@ -1,4 +1,4 @@
-name: Tests
+name: RelayHub quality
 
 on:
   push:
@@ -6,18 +6,72 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        php: ['8.2', '8.3']
+        php: ['8.2', '8.3', '8.4']
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - run: composer install --no-interaction --prefer-dist
-      - run: composer lint
-      - run: composer test
+          tools: composer:v2
+          extensions: mbstring, pdo_sqlite, sqlite3
+      - name: Validate Composer metadata
+        run: composer validate --strict --no-check-publish --no-check-lock
+      - name: Resolve supported Laravel 12 dependencies
+        id: composer
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p build
+          rm -f composer.lock
+          set -o pipefail
+          composer update --no-interaction --prefer-dist --no-progress 2>&1 | tee build/composer-${{ matrix.php }}.log
+      - name: Publish dependency failure summary
+        if: github.event_name == 'pull_request' && steps.composer.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PHP_VERSION: ${{ matrix.php }}
+        shell: bash
+        run: |
+          {
+            echo "### Composer dependency failure — PHP ${PHP_VERSION}"
+            echo
+            echo '```text'
+            tail -n 100 "build/composer-${PHP_VERSION}.log"
+            echo '```'
+          } > build/composer-summary.md
+          gh pr comment "$PR_NUMBER" --body-file build/composer-summary.md
+      - name: Upload Composer resolver log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relayhub-composer-php-${{ matrix.php }}
+          path: build/composer-${{ matrix.php }}.log
+          if-no-files-found: ignore
+      - name: Enforce dependency resolution
+        if: steps.composer.outcome == 'failure'
+        run: exit 1
+      - name: Lint PHP files
+        run: composer lint
+      - name: Run PHPUnit
+        run: |
+          mkdir -p build
+          vendor/bin/phpunit --configuration phpunit.xml --testdox --log-junit build/junit-${{ matrix.php }}.xml
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relayhub-junit-php-${{ matrix.php }}
+          path: build/junit-${{ matrix.php }}.xml
+          if-no-files-found: ignore
