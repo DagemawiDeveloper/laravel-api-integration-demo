@@ -15,6 +15,4 @@ return [
     ],
 
     'queue' => env('RELAYHUB_QUEUE', 'integrations'),
-
-    'idempotency_ttl_minutes' => (int) env('RELAYHUB_IDEMPOTENCY_TTL', 1440),
 ];
