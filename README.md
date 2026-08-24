@@ -1,45 +1,58 @@
 # RelayHub — Laravel API & Webhook Integration Service
 
-**A Laravel reference implementation for reliable third-party integrations: signed webhooks, queues, retries, idempotency, audit logs, and testable service boundaries.**
+[![RelayHub quality](https://github.com/DagemawiDeveloper/laravel-api-integration-demo/actions/workflows/tests.yml/badge.svg)](https://github.com/DagemawiDeveloper/laravel-api-integration-demo/actions/workflows/tests.yml)
 
-This repository focuses on the failure-prone part of API integrations: what happens when the remote service is slow, returns an error, retries the same event, or sends a callback you need to authenticate.
+**A Laravel reference package for reliable third-party integrations: signed webhooks, deterministic idempotency, queues, retries, dead-letter state, bounded observability, and executable tests.**
+
+RelayHub focuses on what happens after the happy-path API demo: a caller repeats the same request, a key is accidentally reused for different content, a partner responds with `503`, a queue exhausts its attempts, or a callback arrives more than once.
 
 ## What this project demonstrates
 
-- Laravel service-provider/package architecture
-- REST API endpoints
-- HMAC-SHA256 webhook authentication
+- Laravel package and service-provider architecture
+- REST webhook endpoints
+- HMAC-SHA256 request authentication
 - Queue-based outbound delivery
-- Configurable retries and backoff
-- Dead-letter state after terminal failure
-- Inbound and outbound idempotency
-- Eloquent audit models
-- Structured integration configuration
-- PHPUnit coverage for signature behavior
-- GitHub Actions CI across multiple PHP versions
+- Configurable retry and backoff policy
+- Explicit `dead_letter` terminal state
+- Deterministic inbound and outbound idempotency
+- Conflict detection when a key is reused for changed content
+- Stable request fingerprints independent of associative-key order
+- Eloquent delivery and callback audit models
+- HTTPS-only outbound integration boundary
+- Response metadata persistence without storing arbitrary partner content
+- PHPUnit feature/unit coverage with Orchestra Testbench
+- GitHub Actions across PHP 8.1, 8.2, and 8.3
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     A[Laravel Feature] --> B[IntegrationClient]
-    B --> C[(Delivery Record)]
-    B --> D[Queue]
-    D --> E[DeliverWebhook]
-    E --> F[HMAC Signature]
-    E --> G[Partner API]
-    G --> E
-    E --> C
+    B --> C{Idempotency key exists?}
+    C -->|No| D[(Queued delivery)]
+    D --> E[Queue]
+    E --> F[DeliverWebhook]
+    F --> G[HMAC signature]
+    G --> H[HTTPS Partner API]
+    H --> F
+    F --> D
+    C -->|Same request| I[Return existing delivery]
+    C -->|Changed request| J[IdempotencyConflict]
 
-    H[Partner System] --> I[Signature Middleware]
-    I --> J[Inbound Controller]
-    J --> K{Duplicate?}
-    K -->|No| L[(Inbound Webhook)]
-    L --> M[Domain Event]
-    K -->|Yes| N[Safe duplicate response]
+    K[Partner System] --> L[Signature middleware]
+    L --> M[Inbound controller]
+    M --> N{Key exists?}
+    N -->|No| O[(Accepted callback)]
+    O --> P[InboundWebhookReceived]
+    N -->|Same request| Q[200 duplicate]
+    N -->|Changed request| R[409 conflict]
 ```
 
-More detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+More detail:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/IDEMPOTENCY.md`](docs/IDEMPOTENCY.md)
+- [`SECURITY.md`](SECURITY.md)
 
 ## Outbound usage
 
@@ -57,7 +70,23 @@ $delivery = app(IntegrationClient::class)->dispatch(
 );
 ```
 
-The request is persisted first, then delivered asynchronously by the queue worker.
+The request is persisted before the queue job is dispatched.
+
+### Replaying the same request
+
+Calling `dispatch()` again with the same key, event, and logically equivalent payload returns the existing delivery and does **not** enqueue a second job. Associative array key order does not affect identity.
+
+### Reusing a key incorrectly
+
+Using the same key for a different event or payload throws:
+
+```php
+Dagemawi\RelayHub\Exceptions\IdempotencyConflict
+```
+
+This is deliberate. Returning an unrelated existing record would hide a caller bug, while creating a second record would violate the idempotency contract.
+
+Event names must be lowercase tokens using letters, numbers, dots, underscores, or hyphens. Explicit keys must contain between 1 and 190 bytes.
 
 ## Inbound usage
 
@@ -65,17 +94,21 @@ Partner systems call:
 
 ```http
 POST /api/relayhub/webhooks/inbound
-```
-
-with:
-
-```text
+Content-Type: application/json
 X-RelayHub-Event: customer.updated
-X-RelayHub-Signature: <HMAC-SHA256>
+X-RelayHub-Signature: <HMAC-SHA256 of the exact raw body>
 Idempotency-Key: partner-customer-event-9182
 ```
 
-Authenticated first-time requests create an inbound record and dispatch `InboundWebhookReceived`. Replays with the same idempotency key return the existing webhook ID instead of processing twice.
+Behavior:
+
+| Situation | Response | Side effect |
+|---|---:|---|
+| First authenticated request | `202` | Persist and dispatch `InboundWebhookReceived` |
+| Identical replay | `200` | Return original webhook ID; do not dispatch again |
+| Same key, changed event/payload | `409` | Explicit `idempotency_conflict`; no second record |
+| Invalid signature | `401` | No persistence or event |
+| Missing/invalid request identity | `422` | No persistence or event |
 
 ## Delivery lifecycle
 
@@ -84,14 +117,33 @@ stateDiagram-v2
     [*] --> queued
     queued --> sending
     sending --> delivered: 2xx
-    sending --> failed: non-2xx / exception
-    failed --> sending: retry
+    sending --> failed: non-2xx / connection error
+    failed --> sending: queue retry
     failed --> dead_letter: attempts exhausted
 ```
 
-## Configuration
+Outbound requests include:
 
-Publish configuration or use environment variables:
+```text
+X-RelayHub-Event
+X-RelayHub-Delivery
+X-RelayHub-Signature
+Idempotency-Key
+```
+
+The queue job uses bounded connection/request timeouts and requires a valid HTTPS destination plus a configured signing secret.
+
+## Bounded observability
+
+Delivery records retain operational state—attempt count, status, HTTP status, timestamps, and last error. Remote response bodies are not persisted verbatim. Instead, RelayHub stores:
+
+- byte count;
+- SHA-256 digest;
+- bounded content type.
+
+This makes failures correlatable without turning an audit table into an uncontrolled copy of partner data or tokens.
+
+## Configuration
 
 ```env
 RELAYHUB_INBOUND_SECRET=replace-me
@@ -105,36 +157,35 @@ RELAYHUB_QUEUE=integrations
 
 See [`.env.example`](.env.example).
 
-## Database observability
-
-Outbound deliveries capture UUID, event name, idempotency key, payload, status, attempts, response code, normalized response body, last exception, and timestamps.
-
-Inbound webhook records provide the same kind of traceability for callbacks received from partners.
-
-## Why idempotency matters
-
-Retries are normal in distributed systems. Without idempotency, a network timeout can turn into a duplicate payment, duplicate order update, duplicate email, or duplicated downstream record.
-
-RelayHub requires a stable inbound idempotency key and also attaches one to outbound requests so both sides can safely retry.
-
-## Testing
+## Tests
 
 ```bash
 composer install
+composer lint
 composer test
 ```
 
-CI runs PHP linting and PHPUnit on PHP 8.2 and 8.3.
+The suite covers:
 
-## Security
+- HMAC signing and tamper rejection;
+- stable idempotency fingerprints;
+- one outbound record/job for a new request;
+- identical outbound replay suppression;
+- outbound key/content conflicts;
+- invalid event/key validation;
+- inbound acceptance and one-time event dispatch;
+- inbound identical replay and changed-content conflict;
+- invalid inbound signatures;
+- successful HTTP delivery and authenticated headers;
+- non-2xx failure state;
+- dead-letter transition;
+- HTTPS enforcement and retry policy.
 
-The repository deliberately keeps credentials out of source control and uses signed payloads, timing-safe comparison, idempotency, bounded HTTP timeouts and queue isolation.
+CI validates Composer metadata, lints PHP, and runs PHPUnit on PHP 8.1, 8.2, and 8.3.
 
-See [`SECURITY.md`](SECURITY.md).
+## Scope
 
-## Engineering focus
-
-This project is intentionally centered on integration reliability rather than CRUD scaffolding. It represents the kind of backend work needed for SaaS platforms, payment integrations, CRM/ERP synchronization, membership systems, marketplace workflows and other API-heavy applications.
+RelayHub is a reference package, not a hosted integration platform. Production deployments should add workload-specific authorization, secret rotation, source restrictions where appropriate, monitoring/alerting, data-retention policy, and reconciliation procedures.
 
 ## Author
 
