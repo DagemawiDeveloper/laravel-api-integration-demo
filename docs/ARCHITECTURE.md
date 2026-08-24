@@ -3,36 +3,71 @@
 ```mermaid
 flowchart LR
     APP[Laravel Application] --> CLIENT[IntegrationClient]
-    CLIENT --> DB[(Delivery Log)]
-    CLIENT --> QUEUE[Queue]
+    CLIENT --> FP[Request Fingerprint]
+    FP --> OUTIDEM{Idempotency decision}
+    OUTIDEM -->|new| DB[(Delivery Log)]
+    DB --> QUEUE[Queue]
     QUEUE --> JOB[DeliverWebhook Job]
     JOB --> SIGN[HMAC Signer]
-    JOB --> EXT[External API]
+    SIGN --> EXT[HTTPS Partner API]
     EXT --> JOB
-    JOB --> DB
+    JOB --> META[Bounded Response Metadata]
+    META --> DB
+    OUTIDEM -->|identical| EXISTING[Return Existing Delivery]
+    OUTIDEM -->|changed| CONFLICT[IdempotencyConflict]
 
     PARTNER[Partner System] -->|Signed POST| MW[Signature Middleware]
-    MW -->|valid| CTRL[Inbound Controller]
     MW -->|invalid| ERR[401]
-    CTRL --> IDEM{Idempotency Key Seen?}
-    IDEM -->|yes| DUP[200 Duplicate]
-    IDEM -->|no| INDB[(Inbound Store)]
+    MW -->|valid| CTRL[Inbound Controller]
+    CTRL --> INFP[Request Fingerprint]
+    INFP --> INIDEM{Idempotency decision}
+    INIDEM -->|new| INDB[(Inbound Store)]
     INDB --> EVENT[InboundWebhookReceived]
+    INIDEM -->|identical| DUP[200 Duplicate]
+    INIDEM -->|changed| INC[409 Conflict]
 ```
 
 ## Reliability model
 
-### Queue-first outbound delivery
-Application code writes a delivery record and dispatches a queue job instead of waiting for an external API during the user request. This isolates customer-facing latency from integration latency.
+### Persist before dispatch
 
-### Exponential-style retry schedule
-Failed deliveries are retried using configurable backoff values. After the final failed attempt, the record is moved into a `dead_letter` state with the terminal exception captured for investigation.
+Application code writes the outbound record before adding the job to the queue. This preserves request identity and gives operations a durable record even when a worker is unavailable.
 
-### Idempotency
-Outbound messages have a stable idempotency key. Inbound requests require an `Idempotency-Key` header and duplicates return the original accepted webhook ID instead of executing business logic twice.
+### Deterministic idempotency
+
+A unique key is not treated as a database implementation detail. It defines request identity:
+
+- same key + same normalized event/payload → return the existing record;
+- same key + changed event/payload → explicit conflict;
+- new key → create and dispatch exactly once.
+
+Associative payload keys are recursively sorted before hashing, while list order remains meaningful. Details are in [`IDEMPOTENCY.md`](IDEMPOTENCY.md).
+
+`firstOrCreate()` works with the database uniqueness constraint to make duplicate creation safe under competing callers. Side effects are triggered only when the model is newly created.
+
+### Queue retry lifecycle
+
+The job records `sending`, increments attempts, and applies bounded connect/request timeouts. A non-2xx response or connection exception is stored as `failed` and rethrown so the queue can retry. After the configured attempts are exhausted, Laravel calls `failed()` and RelayHub moves the record to `dead_letter`.
 
 ### Signed payloads
-Raw JSON payloads are authenticated with HMAC-SHA256. Signature checks are timing-safe and happen before inbound payload processing.
 
-### Audit trail
-Each delivery tracks status, attempts, response code, response body, last error and delivery timestamps. This creates an operational history for debugging integration failures.
+Raw JSON bodies use HMAC-SHA256, and verification uses `hash_equals()` before the inbound controller processes or persists the request.
+
+### Bounded audit data
+
+Delivery state includes attempts, response code, timestamps, and the last error. Arbitrary remote response content is deliberately not stored. The response audit value contains only size, SHA-256, and bounded content type.
+
+### HTTPS boundary
+
+Outbound delivery requires a syntactically valid `https://` URL and a configured signing secret before the HTTP client is invoked.
+
+## Failure behavior
+
+| Failure | Persisted state | Caller/queue behavior |
+|---|---|---|
+| Identical duplicate | Existing record | No duplicate side effect |
+| Key reused for changed content | Existing record only | Domain exception or HTTP `409` |
+| Invalid inbound signature | Nothing | HTTP `401` |
+| Partner non-2xx | `failed` | Exception triggers retry |
+| Connection exception | `failed` | Original exception triggers retry |
+| Attempts exhausted | `dead_letter` | Requires investigation/re-drive |
