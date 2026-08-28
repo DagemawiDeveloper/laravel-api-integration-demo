@@ -1,10 +1,8 @@
-# RelayHub — Laravel API & Webhook Integration Service
+# RelayHub - Laravel API and Webhook Integration
 
 [![RelayHub quality](https://github.com/DagemawiDeveloper/laravel-api-integration-demo/actions/workflows/tests.yml/badge.svg)](https://github.com/DagemawiDeveloper/laravel-api-integration-demo/actions/workflows/tests.yml)
 
-**A Laravel 12 reference package for reliable third-party integrations: signed webhooks, deterministic idempotency, queues, retries, dead-letter state, bounded observability, and executable tests.**
-
-RelayHub focuses on what happens after the happy-path API demo: a caller repeats the same request, a key is accidentally reused for different content, a partner responds with `503`, a queue exhausts its attempts, or a callback arrives more than once.
+RelayHub is a small Laravel 12 package I use to work through the failure cases that simple API examples usually skip. A caller retries the same request, an idempotency key is reused for different content, a partner returns `503`, or a callback arrives twice. The decisions for those cases are kept in a small codebase so they can be read, tested, and discussed.
 
 ## What this project demonstrates
 
@@ -109,6 +107,7 @@ Behavior:
 | Same key, changed event/payload | `409` | Explicit `idempotency_conflict`; no second record |
 | Invalid signature | `401` | No persistence or event |
 | Missing/invalid request identity | `422` | No persistence or event |
+| Malformed or scalar JSON body | `422` | No persistence or event |
 
 ## Delivery lifecycle
 
@@ -183,16 +182,25 @@ The suite covers:
 - inbound acceptance and one-time event dispatch;
 - inbound identical replay and changed-content conflict;
 - invalid inbound signatures;
+- malformed and scalar inbound JSON;
 - successful HTTP delivery and authenticated headers;
+- duplicate execution after a completed delivery;
 - non-2xx failure state;
 - dead-letter transition;
 - HTTPS enforcement and retry policy.
 
 CI validates Composer metadata, resolves supported Laravel 12 dependencies, lints PHP, and runs PHPUnit on PHP 8.2, 8.3, and 8.4.
 
-## Scope
+## Limits and trade-offs
 
-RelayHub is a reference package, not a hosted integration platform. Production deployments should add workload-specific authorization, secret rotation, source restrictions where appropriate, monitoring/alerting, data-retention policy, and reconciliation procedures.
+RelayHub is a code sample, not an exactly-once delivery system.
+
+- The delivery record and a Redis/SQS queue message cannot be committed atomically. A production system that cannot tolerate that handoff window should use a transactional outbox or a database-backed queue.
+- Outbound delivery is still at-least-once if a worker loses its process after the partner accepts the request but before local state is saved. The receiving system must honor `Idempotency-Key`.
+- HMAC proves possession of the shared secret, but this sample does not add timestamp freshness or secret rotation.
+- SQLite keeps the test suite fast, but real concurrency behavior should also be tested against the production database engine.
+
+Production deployments should also add workload-specific authorization, source restrictions where appropriate, monitoring and alerts, data-retention policy, and reconciliation procedures.
 
 ## Author
 

@@ -76,6 +76,25 @@ final class DeliverWebhookTest extends TestCase
         self::assertArrayNotHasKey('raw', $delivery->response_body);
     }
 
+    public function test_already_delivered_job_does_not_send_the_webhook_again(): void
+    {
+        Http::fake();
+        $delivery = $this->delivery();
+        $delivery->forceFill([
+            'status' => 'delivered',
+            'attempts' => 1,
+            'delivered_at' => now(),
+        ])->save();
+
+        (new DeliverWebhook($delivery->id))->handle($this->app->make(HmacSignature::class));
+
+        $delivery->refresh();
+
+        self::assertSame('delivered', $delivery->status);
+        self::assertSame(1, $delivery->attempts);
+        Http::assertNothingSent();
+    }
+
     public function test_terminal_queue_failure_moves_delivery_to_dead_letter(): void
     {
         $delivery = $this->delivery();

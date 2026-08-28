@@ -2,8 +2,8 @@
 
 namespace Dagemawi\RelayHub\Jobs;
 
+use Dagemawi\RelayHub\Contracts\SignatureVerifier;
 use Dagemawi\RelayHub\Models\WebhookDelivery;
-use Dagemawi\RelayHub\Services\HmacSignature;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -30,9 +30,14 @@ class DeliverWebhook implements ShouldQueue
         return array_map('intval', (array) config('relayhub.outbound.backoff_seconds', [10, 30, 120, 300]));
     }
 
-    public function handle(HmacSignature $signer): void
+    public function handle(SignatureVerifier $signer): void
     {
         $delivery = WebhookDelivery::query()->findOrFail($this->deliveryId);
+
+        if ($delivery->status === 'delivered') {
+            return;
+        }
+
         $url = trim((string) config('relayhub.outbound.url'));
         $secret = (string) config('relayhub.outbound.secret');
 
