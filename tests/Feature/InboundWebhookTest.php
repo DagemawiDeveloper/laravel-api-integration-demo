@@ -99,6 +99,22 @@ final class InboundWebhookTest extends TestCase
         Event::assertNotDispatched(InboundWebhookReceived::class);
     }
 
+    public function test_malformed_or_scalar_json_is_rejected_before_persistence(): void
+    {
+        Event::fake([InboundWebhookReceived::class]);
+
+        foreach (['{"customer_id":', '"customer-42"'] as $body) {
+            $this->postWebhook($body, 'customer.updated', 'partner-customer-42')
+                ->assertStatus(422)
+                ->assertJson([
+                    'message' => 'Webhook body must be valid JSON containing an object or array.',
+                ]);
+        }
+
+        self::assertSame(0, InboundWebhook::query()->count());
+        Event::assertNotDispatched(InboundWebhookReceived::class);
+    }
+
     public function test_missing_or_invalid_request_identity_is_rejected(): void
     {
         $body = json_encode(['customer_id' => 42], JSON_THROW_ON_ERROR);

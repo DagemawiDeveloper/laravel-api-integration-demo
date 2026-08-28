@@ -13,6 +13,9 @@ class WebhookDelivery extends Model
     protected $casts = [
         'payload' => 'array',
         'response_body' => 'array',
+        'attempts' => 'integer',
+        'response_code' => 'integer',
+        'last_attempt_at' => 'datetime',
         'delivered_at' => 'datetime',
     ];
 }

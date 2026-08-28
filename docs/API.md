@@ -18,6 +18,8 @@ Idempotency-Key: partner-event-123
 
 The signature is generated against the exact raw JSON request body.
 
+The body must decode to a JSON object or array. Malformed JSON and scalar JSON values receive HTTP `422` and are not persisted.
+
 ### Example sender
 
 ```php

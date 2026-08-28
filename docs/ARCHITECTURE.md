@@ -33,6 +33,8 @@ flowchart LR
 
 Application code writes the outbound record before adding the job to the queue. This preserves request identity and gives operations a durable record even when a worker is unavailable.
 
+The database write and an external queue broker are not one atomic operation. Deployments that need a crash-safe handoff should use a transactional outbox or a database-backed queue. RelayHub does not claim exactly-once delivery.
+
 ### Deterministic idempotency
 
 A unique key is not treated as a database implementation detail. It defines request identity:
@@ -48,6 +50,8 @@ Associative payload keys are recursively sorted before hashing, while list order
 ### Queue retry lifecycle
 
 The job records `sending`, increments attempts, and applies bounded connect/request timeouts. A non-2xx response or connection exception is stored as `failed` and rethrown so the queue can retry. After the configured attempts are exhausted, Laravel calls `failed()` and RelayHub moves the record to `dead_letter`.
+
+If an already completed job is delivered again, the handler returns without sending a second HTTP request. The outbound `Idempotency-Key` still remains necessary for the crash window between partner acceptance and the local `delivered` update.
 
 ### Signed payloads
 

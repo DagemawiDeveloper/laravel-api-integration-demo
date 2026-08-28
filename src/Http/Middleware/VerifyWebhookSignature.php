@@ -3,13 +3,13 @@
 namespace Dagemawi\RelayHub\Http\Middleware;
 
 use Closure;
-use Dagemawi\RelayHub\Services\HmacSignature;
+use Dagemawi\RelayHub\Contracts\SignatureVerifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class VerifyWebhookSignature
 {
-    public function __construct(private readonly HmacSignature $signer)
+    public function __construct(private readonly SignatureVerifier $signer)
     {
     }
 

@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
+use JsonException;
 
 class InboundWebhookController extends Controller
 {
@@ -34,7 +35,19 @@ class InboundWebhookController extends Controller
             ], 422);
         }
 
-        $payload = $request->json()->all();
+        try {
+            $payload = json_decode($request->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return response()->json([
+                'message' => 'Webhook body must be valid JSON containing an object or array.',
+            ], 422);
+        }
+
+        if (! is_array($payload)) {
+            return response()->json([
+                'message' => 'Webhook body must be valid JSON containing an object or array.',
+            ], 422);
+        }
 
         $webhook = InboundWebhook::query()->firstOrCreate(
             ['idempotency_key' => $idempotencyKey],

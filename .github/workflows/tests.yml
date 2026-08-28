@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   test:
@@ -37,10 +36,8 @@ jobs:
           set -o pipefail
           composer update --no-interaction --prefer-dist --no-progress 2>&1 | tee build/composer-${{ matrix.php }}.log
       - name: Publish dependency failure summary
-        if: github.event_name == 'pull_request' && steps.composer.outcome == 'failure'
+        if: steps.composer.outcome == 'failure'
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           PHP_VERSION: ${{ matrix.php }}
         shell: bash
         run: |
@@ -50,8 +47,7 @@ jobs:
             echo '```text'
             tail -n 100 "build/composer-${PHP_VERSION}.log"
             echo '```'
-          } > build/composer-summary.md
-          gh pr comment "$PR_NUMBER" --body-file build/composer-summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Composer resolver log
         if: always()
         uses: actions/upload-artifact@v4

@@ -39,3 +39,4 @@ Production deployments should additionally provide:
 - monitoring, alerts, and dead-letter re-drive procedures;
 - retention and privacy policy for request payloads;
 - reconciliation for externally completed operations.
+- a transactional outbox or database queue when broker handoff must survive process failure.
